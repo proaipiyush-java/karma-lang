@@ -1,14 +1,15 @@
-use crate::ast::{Expr, Literal, Stmt};
+use crate::ast::{Literal, Param};
 use crate::environment::{EnvRef, Environment};
 use crate::error::KarmaError;
 use crate::token::TokenKind;
+use crate::typed_ast::{TypedExpr, TypedExprKind, TypedProgram, TypedStmt, TypedStmtKind};
 use crate::value::Value;
 use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
 struct FunctionDef {
-    params: Vec<String>,
-    body: Vec<Stmt>,
+    params: Vec<Param>,
+    body: Vec<TypedStmt>,
 }
 
 #[derive(Debug, Clone)]
@@ -56,31 +57,40 @@ impl Interpreter {
         }
     }
 
-    pub fn run(mut self, program: &[Stmt]) -> Result<Vec<String>, KarmaError> {
+    pub fn run(mut self, program: &TypedProgram) -> Result<Vec<String>, KarmaError> {
         self.register_top_level_functions(program)?;
         let env = self.globals.clone();
         for stmt in program {
-            if matches!(stmt, Stmt::Function { .. }) {
+            if matches!(&stmt.kind, TypedStmtKind::Function { .. }) {
                 continue;
             }
             match self.execute(stmt, env.clone())? {
                 Flow::Continue => {}
                 Flow::Return(_) => {
-                    return Err(KarmaError::runtime("'return' can only be used inside a function"))
+                    return Err(KarmaError::runtime(
+                        "internal invariant: top-level return passed type checking",
+                    ))
                 }
             }
         }
         Ok(self.output)
     }
 
-    fn register_top_level_functions(&mut self, program: &[Stmt]) -> Result<(), KarmaError> {
+    fn register_top_level_functions(&mut self, program: &TypedProgram) -> Result<(), KarmaError> {
         for stmt in program {
-            if let Stmt::Function { name, params, body } = stmt {
+            if let TypedStmtKind::Function {
+                name, params, body, ..
+            } = &stmt.kind
+            {
                 if name == "print" {
-                    return Err(KarmaError::runtime("'print' is a reserved built-in function"));
+                    return Err(KarmaError::runtime(
+                        "'print' is a reserved built-in function",
+                    ));
                 }
                 if self.functions.contains_key(name) {
-                    return Err(KarmaError::runtime(format!("function '{name}' is already defined")));
+                    return Err(KarmaError::runtime(format!(
+                        "function '{name}' is already defined"
+                    )));
                 }
                 self.functions.insert(
                     name.clone(),
@@ -94,42 +104,67 @@ impl Interpreter {
         Ok(())
     }
 
-    fn execute(&mut self, stmt: &Stmt, env: EnvRef) -> Result<Flow, KarmaError> {
+    fn execute(&mut self, stmt: &TypedStmt, env: EnvRef) -> Result<Flow, KarmaError> {
         self.tick()?;
-        match stmt {
-            Stmt::Let { name, initializer } => {
+        match &stmt.kind {
+            TypedStmtKind::Binding {
+                name,
+                mutable,
+                initializer,
+                ..
+            } => {
                 let value = self.evaluate(initializer, env.clone())?;
-                env.borrow_mut().define(name.clone(), value)?;
+                env.borrow_mut().define(name.clone(), value, *mutable)?;
                 Ok(Flow::Continue)
             }
-            Stmt::Expression(expr) => {
+            TypedStmtKind::Expression(expr) => {
                 self.evaluate(expr, env)?;
                 Ok(Flow::Continue)
             }
-            Stmt::Block(statements) => {
+            TypedStmtKind::Block(statements) => {
                 let block_env = Environment::child(env);
                 self.execute_block(statements, block_env)
             }
-            Stmt::If { condition, then_branch, else_branch } => {
-                if self.evaluate(condition, env.clone())?.is_truthy() {
-                    self.execute(then_branch, env)
-                } else if let Some(else_branch) = else_branch {
-                    self.execute(else_branch, env)
-                } else {
-                    Ok(Flow::Continue)
+            TypedStmtKind::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                let condition = self.evaluate(condition, env.clone())?;
+                match condition {
+                    Value::Bool(true) => self.execute(then_branch, env),
+                    Value::Bool(false) => {
+                        if let Some(else_branch) = else_branch {
+                            self.execute(else_branch, env)
+                        } else {
+                            Ok(Flow::Continue)
+                        }
+                    }
+                    _ => Err(KarmaError::runtime(
+                        "internal invariant: non-Bool if condition passed type checking",
+                    )),
                 }
             }
-            Stmt::While { condition, body } => {
-                while self.evaluate(condition, env.clone())?.is_truthy() {
-                    match self.execute(body, env.clone())? {
-                        Flow::Continue => {}
-                        flow @ Flow::Return(_) => return Ok(flow),
+            TypedStmtKind::While { condition, body } => {
+                loop {
+                    let condition_value = self.evaluate(condition, env.clone())?;
+                    match condition_value {
+                        Value::Bool(true) => match self.execute(body, env.clone())? {
+                            Flow::Continue => {}
+                            flow @ Flow::Return(_) => return Ok(flow),
+                        },
+                        Value::Bool(false) => break,
+                        _ => {
+                            return Err(KarmaError::runtime(
+                                "internal invariant: non-Bool while condition passed type checking",
+                            ))
+                        }
                     }
                 }
                 Ok(Flow::Continue)
             }
-            Stmt::Function { .. } => Ok(Flow::Continue),
-            Stmt::Return(value) => {
+            TypedStmtKind::Function { .. } => Ok(Flow::Continue),
+            TypedStmtKind::Return(value) => {
                 let value = match value {
                     Some(expr) => self.evaluate(expr, env)?,
                     None => Value::Unit,
@@ -139,7 +174,7 @@ impl Interpreter {
         }
     }
 
-    fn execute_block(&mut self, statements: &[Stmt], env: EnvRef) -> Result<Flow, KarmaError> {
+    fn execute_block(&mut self, statements: &[TypedStmt], env: EnvRef) -> Result<Flow, KarmaError> {
         for stmt in statements {
             match self.execute(stmt, env.clone())? {
                 Flow::Continue => {}
@@ -149,42 +184,49 @@ impl Interpreter {
         Ok(Flow::Continue)
     }
 
-    fn evaluate(&mut self, expr: &Expr, env: EnvRef) -> Result<Value, KarmaError> {
+    fn evaluate(&mut self, expr: &TypedExpr, env: EnvRef) -> Result<Value, KarmaError> {
         self.tick()?;
-        match expr {
-            Expr::Literal(literal) => Ok(match literal {
+        match &expr.kind {
+            TypedExprKind::Literal(literal) => Ok(match literal {
                 Literal::Int(v) => Value::Int(*v),
                 Literal::Bool(v) => Value::Bool(*v),
                 Literal::String(v) => Value::String(v.clone()),
             }),
-            Expr::Variable(name) => env.borrow().get(name),
-            Expr::Assign { name, value } => {
+            TypedExprKind::Variable(name) => env.borrow().get(name),
+            TypedExprKind::Assign { name, value } => {
                 let value = self.evaluate(value, env.clone())?;
                 env.borrow_mut().assign(name, value.clone())?;
                 Ok(value)
             }
-            Expr::Unary { op, right } => {
+            TypedExprKind::Unary { op, right } => {
                 let right = self.evaluate(right, env)?;
                 self.eval_unary(op, right)
             }
-            Expr::Binary { left, op, right } => {
+            TypedExprKind::Binary { left, op, right } => {
                 let left = self.evaluate(left, env.clone())?;
                 let right = self.evaluate(right, env)?;
                 self.eval_binary(left, op, right)
             }
-            Expr::Call { callee, arguments } => self.call(callee, arguments, env),
+            TypedExprKind::Call { callee, arguments } => self.call(callee, arguments, env),
         }
     }
 
     fn eval_unary(&self, op: &TokenKind, right: Value) -> Result<Value, KarmaError> {
         match op {
-            TokenKind::Bang => Ok(Value::Bool(!right.is_truthy())),
+            TokenKind::Bang => match right {
+                Value::Bool(value) => Ok(Value::Bool(!value)),
+                _ => Err(KarmaError::runtime(
+                    "internal invariant: non-Bool operand passed type checking for '!'",
+                )),
+            },
             TokenKind::Minus => match right {
                 Value::Int(v) => v
                     .checked_neg()
                     .map(Value::Int)
                     .ok_or_else(|| KarmaError::runtime("integer overflow in unary '-'")),
-                other => Err(type_error("unary '-'", "Int", &other)),
+                _ => Err(KarmaError::runtime(
+                    "internal invariant: non-Int operand passed type checking for '-'",
+                )),
             },
             _ => Err(KarmaError::runtime("unsupported unary operator")),
         }
@@ -199,29 +241,32 @@ impl Interpreter {
                     .map(Value::Int)
                     .ok_or_else(|| KarmaError::runtime("integer overflow in '+'")),
                 (Value::String(a), Value::String(b)) => Ok(Value::String(a + &b)),
-                (a, b) => Err(KarmaError::runtime(format!(
-                    "'+' requires Int+Int or String+String, got {}+{}",
-                    a.type_name(),
-                    b.type_name()
-                ))),
+                _ => Err(KarmaError::runtime(
+                    "internal invariant: invalid '+' operands passed type checking",
+                )),
             },
             Minus | Star | Slash => self.eval_integer_arithmetic(left, op, right),
-            Greater | GreaterEqual | Less | LessEqual => self.eval_integer_comparison(left, op, right),
+            Greater | GreaterEqual | Less | LessEqual => {
+                self.eval_integer_comparison(left, op, right)
+            }
             EqualEqual => Ok(Value::Bool(left == right)),
             BangEqual => Ok(Value::Bool(left != right)),
             _ => Err(KarmaError::runtime("unsupported binary operator")),
         }
     }
 
-    fn eval_integer_arithmetic(&self, left: Value, op: &TokenKind, right: Value) -> Result<Value, KarmaError> {
+    fn eval_integer_arithmetic(
+        &self,
+        left: Value,
+        op: &TokenKind,
+        right: Value,
+    ) -> Result<Value, KarmaError> {
         let (a, b) = match (left, right) {
             (Value::Int(a), Value::Int(b)) => (a, b),
-            (a, b) => {
-                return Err(KarmaError::runtime(format!(
-                    "arithmetic requires Int operands, got {} and {}",
-                    a.type_name(),
-                    b.type_name()
-                )))
+            _ => {
+                return Err(KarmaError::runtime(
+                    "internal invariant: non-Int arithmetic operands passed type checking",
+                ))
             }
         };
 
@@ -236,20 +281,24 @@ impl Interpreter {
             }
             _ => None,
         };
+
         value
             .map(Value::Int)
             .ok_or_else(|| KarmaError::runtime("integer overflow in arithmetic operation"))
     }
 
-    fn eval_integer_comparison(&self, left: Value, op: &TokenKind, right: Value) -> Result<Value, KarmaError> {
+    fn eval_integer_comparison(
+        &self,
+        left: Value,
+        op: &TokenKind,
+        right: Value,
+    ) -> Result<Value, KarmaError> {
         let (a, b) = match (left, right) {
             (Value::Int(a), Value::Int(b)) => (a, b),
-            (a, b) => {
-                return Err(KarmaError::runtime(format!(
-                    "comparison requires Int operands, got {} and {}",
-                    a.type_name(),
-                    b.type_name()
-                )))
+            _ => {
+                return Err(KarmaError::runtime(
+                    "internal invariant: non-Int comparison operands passed type checking",
+                ))
             }
         };
         let result = match op {
@@ -262,7 +311,12 @@ impl Interpreter {
         Ok(Value::Bool(result))
     }
 
-    fn call(&mut self, callee: &str, arguments: &[Expr], env: EnvRef) -> Result<Value, KarmaError> {
+    fn call(
+        &mut self,
+        callee: &str,
+        arguments: &[TypedExpr],
+        env: EnvRef,
+    ) -> Result<Value, KarmaError> {
         if callee == "print" {
             if arguments.len() != 1 {
                 return Err(KarmaError::runtime(format!(
@@ -300,8 +354,10 @@ impl Interpreter {
 
         self.call_depth += 1;
         let call_env = Environment::child(self.globals.clone());
-        for (name, value) in function.params.iter().cloned().zip(values) {
-            call_env.borrow_mut().define(name, value)?;
+        for (param, value) in function.params.iter().zip(values) {
+            call_env
+                .borrow_mut()
+                .define(param.name.clone(), value, false)?;
         }
 
         let result = match self.execute_block(&function.body, call_env) {
@@ -325,23 +381,18 @@ impl Interpreter {
     }
 }
 
-fn type_error(operation: &str, expected: &str, actual: &Value) -> KarmaError {
-    KarmaError::runtime(format!(
-        "{operation} requires {expected}, got {}",
-        actual.type_name()
-    ))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::lexer::Lexer;
     use crate::parser::Parser;
+    use crate::type_checker::TypeChecker;
 
     fn run(source: &str) -> Result<Vec<String>, KarmaError> {
         let tokens = Lexer::new(source).scan_tokens()?;
         let program = Parser::new(tokens).parse()?;
-        Interpreter::new().run(&program)
+        let typed_program = TypeChecker::new().check(&program)?;
+        Interpreter::new().run(&typed_program)
     }
 
     #[test]
@@ -350,9 +401,9 @@ mod tests {
     }
 
     #[test]
-    fn runs_function_and_recursion() {
+    fn runs_typed_function_and_recursion() {
         let source = r#"
-            fn fact(n) {
+            fn fact(n: Int) -> Int {
                 if n <= 1 { return 1; }
                 return n * fact(n - 1);
             }
@@ -362,13 +413,19 @@ mod tests {
     }
 
     #[test]
-    fn detects_division_by_zero() {
+    fn runs_mutable_binding() {
+        let source = "mut count: Int = 1; count = count + 1; print(count);";
+        assert_eq!(run(source).unwrap(), vec!["2"]);
+    }
+
+    #[test]
+    fn detects_division_by_zero_at_runtime() {
         let error = run("print(1 / 0);").unwrap_err();
         assert!(error.message.contains("division by zero"));
     }
 
     #[test]
-    fn detects_integer_overflow() {
+    fn detects_integer_overflow_at_runtime() {
         let error = run("print(9223372036854775807 + 1);").unwrap_err();
         assert!(error.message.contains("overflow"));
     }

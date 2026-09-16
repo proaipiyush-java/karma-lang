@@ -1,3 +1,5 @@
+use crate::source::SourcePos;
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum TokenKind {
     LeftParen,
@@ -6,6 +8,8 @@ pub enum TokenKind {
     RightBrace,
     Comma,
     Semicolon,
+    Colon,
+    Arrow,
     Plus,
     Minus,
     Star,
@@ -22,6 +26,7 @@ pub enum TokenKind {
     Integer(i64),
     String(String),
     Let,
+    Mut,
     Fn,
     Return,
     If,
@@ -29,6 +34,10 @@ pub enum TokenKind {
     While,
     True,
     False,
+    TypeInt,
+    TypeBool,
+    TypeString,
+    TypeUnit,
     Eof,
 }
 
@@ -42,5 +51,9 @@ pub struct Token {
 impl Token {
     pub fn new(kind: TokenKind, line: usize, column: usize) -> Self {
         Self { kind, line, column }
+    }
+
+    pub fn pos(&self) -> SourcePos {
+        SourcePos::new(self.line, self.column)
     }
 }

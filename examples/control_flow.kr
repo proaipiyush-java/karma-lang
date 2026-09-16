@@ -1,11 +1,10 @@
-let count = 0;
-while count < 5 {
-    print(count);
-    count = count + 1;
-}
+mut count: Int = 0;
 
-if count == 5 {
-    print("done");
-} else {
-    print("unexpected");
+while count < 3 {
+    if count == 1 {
+        print("middle");
+    } else {
+        print(count);
+    }
+    count = count + 1;
 }

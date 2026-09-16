@@ -39,23 +39,47 @@ impl Lexer {
             '}' => tokens.push(Token::new(TokenKind::RightBrace, line, column)),
             ',' => tokens.push(Token::new(TokenKind::Comma, line, column)),
             ';' => tokens.push(Token::new(TokenKind::Semicolon, line, column)),
+            ':' => tokens.push(Token::new(TokenKind::Colon, line, column)),
             '+' => tokens.push(Token::new(TokenKind::Plus, line, column)),
-            '-' => tokens.push(Token::new(TokenKind::Minus, line, column)),
+            '-' => {
+                let kind = if self.matches('>') {
+                    TokenKind::Arrow
+                } else {
+                    TokenKind::Minus
+                };
+                tokens.push(Token::new(kind, line, column));
+            }
             '*' => tokens.push(Token::new(TokenKind::Star, line, column)),
             '!' => {
-                let kind = if self.matches('=') { TokenKind::BangEqual } else { TokenKind::Bang };
+                let kind = if self.matches('=') {
+                    TokenKind::BangEqual
+                } else {
+                    TokenKind::Bang
+                };
                 tokens.push(Token::new(kind, line, column));
             }
             '=' => {
-                let kind = if self.matches('=') { TokenKind::EqualEqual } else { TokenKind::Equal };
+                let kind = if self.matches('=') {
+                    TokenKind::EqualEqual
+                } else {
+                    TokenKind::Equal
+                };
                 tokens.push(Token::new(kind, line, column));
             }
             '<' => {
-                let kind = if self.matches('=') { TokenKind::LessEqual } else { TokenKind::Less };
+                let kind = if self.matches('=') {
+                    TokenKind::LessEqual
+                } else {
+                    TokenKind::Less
+                };
                 tokens.push(Token::new(kind, line, column));
             }
             '>' => {
-                let kind = if self.matches('=') { TokenKind::GreaterEqual } else { TokenKind::Greater };
+                let kind = if self.matches('=') {
+                    TokenKind::GreaterEqual
+                } else {
+                    TokenKind::Greater
+                };
                 tokens.push(Token::new(kind, line, column));
             }
             '/' => {
@@ -119,7 +143,12 @@ impl Lexer {
         }
 
         if self.is_at_end() {
-            return Err(KarmaError::new("lexer", "unterminated string", line, column));
+            return Err(KarmaError::new(
+                "lexer",
+                "unterminated string",
+                line,
+                column,
+            ));
         }
         self.advance();
         Ok(TokenKind::String(value))
@@ -131,7 +160,12 @@ impl Lexer {
             text.push(self.advance());
         }
         let value = text.parse::<i64>().map_err(|_| {
-            KarmaError::new("lexer", "integer literal is outside Int range", line, column)
+            KarmaError::new(
+                "lexer",
+                "integer literal is outside Int range",
+                line,
+                column,
+            )
         })?;
         Ok(TokenKind::Integer(value))
     }
@@ -143,6 +177,7 @@ impl Lexer {
         }
         match text.as_str() {
             "let" => TokenKind::Let,
+            "mut" => TokenKind::Mut,
             "fn" => TokenKind::Fn,
             "return" => TokenKind::Return,
             "if" => TokenKind::If,
@@ -150,6 +185,10 @@ impl Lexer {
             "while" => TokenKind::While,
             "true" => TokenKind::True,
             "false" => TokenKind::False,
+            "Int" => TokenKind::TypeInt,
+            "Bool" => TokenKind::TypeBool,
+            "String" => TokenKind::TypeString,
+            "Unit" => TokenKind::TypeUnit,
             _ => TokenKind::Identifier(text),
         }
     }
@@ -179,7 +218,11 @@ impl Lexer {
     }
 
     fn peek(&self) -> char {
-        if self.is_at_end() { '\0' } else { self.chars[self.current] }
+        if self.is_at_end() {
+            '\0'
+        } else {
+            self.chars[self.current]
+        }
     }
 }
 
@@ -196,16 +239,29 @@ mod tests {
     use super::*;
 
     #[test]
-    fn lexes_basic_program() {
-        let tokens = Lexer::new("let x = 12 + 3;").scan_tokens().unwrap();
+    fn lexes_typed_binding() {
+        let tokens = Lexer::new("let x: Int = 12;").scan_tokens().unwrap();
         assert!(matches!(tokens[0].kind, TokenKind::Let));
         assert!(matches!(tokens[1].kind, TokenKind::Identifier(ref s) if s == "x"));
-        assert!(matches!(tokens[3].kind, TokenKind::Integer(12)));
+        assert!(matches!(tokens[2].kind, TokenKind::Colon));
+        assert!(matches!(tokens[3].kind, TokenKind::TypeInt));
+    }
+
+    #[test]
+    fn lexes_mut_and_function_arrow() {
+        let source = "mut x: Int = 1; fn f(a: Int) -> Int { return a; }";
+        let tokens = Lexer::new(source).scan_tokens().unwrap();
+        assert!(tokens.iter().any(|t| matches!(t.kind, TokenKind::Mut)));
+        assert!(tokens.iter().any(|t| matches!(t.kind, TokenKind::Arrow)));
     }
 
     #[test]
     fn skips_line_comments() {
-        let tokens = Lexer::new("let x = 1; // note\nprint(x);").scan_tokens().unwrap();
-        assert!(tokens.iter().any(|t| matches!(t.kind, TokenKind::Identifier(ref s) if s == "print")));
+        let tokens = Lexer::new("let x = 1; // note\nprint(x);")
+            .scan_tokens()
+            .unwrap();
+        assert!(tokens
+            .iter()
+            .any(|t| matches!(t.kind, TokenKind::Identifier(ref s) if s == "print")));
     }
 }

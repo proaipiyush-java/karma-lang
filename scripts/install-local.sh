@@ -4,7 +4,7 @@ set -eu
 PREFIX="${KARMA_PREFIX:-$HOME/.local}"
 BIN_DIR="$PREFIX/bin"
 
-echo "Building Karma v0.1 in release mode..."
+echo "Building Karma v0.2 in release mode..."
 cargo build --release
 
 mkdir -p "$BIN_DIR"

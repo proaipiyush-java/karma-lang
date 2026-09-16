@@ -1,4 +1,6 @@
+use crate::source::SourcePos;
 use crate::token::TokenKind;
+use crate::types::Type;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Literal {
@@ -8,7 +10,19 @@ pub enum Literal {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum Expr {
+pub struct Expr {
+    pub kind: ExprKind,
+    pub pos: SourcePos,
+}
+
+impl Expr {
+    pub fn new(kind: ExprKind, pos: SourcePos) -> Self {
+        Self { kind, pos }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ExprKind {
     Literal(Literal),
     Variable(String),
     Assign {
@@ -31,9 +45,30 @@ pub enum Expr {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum Stmt {
-    Let {
+pub struct Param {
+    pub name: String,
+    pub ty: Type,
+    pub pos: SourcePos,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Stmt {
+    pub kind: StmtKind,
+    pub pos: SourcePos,
+}
+
+impl Stmt {
+    pub fn new(kind: StmtKind, pos: SourcePos) -> Self {
+        Self { kind, pos }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum StmtKind {
+    Binding {
         name: String,
+        mutable: bool,
+        annotation: Option<Type>,
         initializer: Expr,
     },
     Expression(Expr),
@@ -49,7 +84,8 @@ pub enum Stmt {
     },
     Function {
         name: String,
-        params: Vec<String>,
+        params: Vec<Param>,
+        return_type: Type,
         body: Vec<Stmt>,
     },
     Return(Option<Expr>),

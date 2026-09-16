@@ -1,6 +1,8 @@
-use crate::ast::{Expr, Literal, Stmt};
+use crate::ast::{Expr, ExprKind, Literal, Param, Stmt, StmtKind};
 use crate::error::KarmaError;
+use crate::source::SourcePos;
 use crate::token::{Token, TokenKind};
+use crate::types::Type;
 
 pub struct Parser {
     tokens: Vec<Token>,
@@ -22,89 +24,154 @@ impl Parser {
 
     fn declaration(&mut self) -> Result<Stmt, KarmaError> {
         if self.match_simple(&TokenKind::Let) {
-            self.let_declaration()
+            let pos = self.previous().pos();
+            self.binding_declaration(false, pos)
+        } else if self.match_simple(&TokenKind::Mut) {
+            let pos = self.previous().pos();
+            self.binding_declaration(true, pos)
         } else if self.match_simple(&TokenKind::Fn) {
-            self.function_declaration()
+            let pos = self.previous().pos();
+            self.function_declaration(pos)
         } else {
             self.statement()
         }
     }
 
-    fn let_declaration(&mut self) -> Result<Stmt, KarmaError> {
-        let name = self.consume_identifier("expected variable name after 'let'")?;
-        self.consume_simple(&TokenKind::Equal, "expected '=' after variable name")?;
+    fn binding_declaration(&mut self, mutable: bool, pos: SourcePos) -> Result<Stmt, KarmaError> {
+        let name = self.consume_identifier("expected variable name after binding keyword")?;
+        let annotation = if self.match_simple(&TokenKind::Colon) {
+            Some(self.consume_type("expected type after ':'")?)
+        } else {
+            None
+        };
+        self.consume_simple(&TokenKind::Equal, "expected '=' after variable declaration")?;
         let initializer = self.expression()?;
-        self.consume_simple(&TokenKind::Semicolon, "expected ';' after variable declaration")?;
-        Ok(Stmt::Let { name, initializer })
+        self.consume_simple(
+            &TokenKind::Semicolon,
+            "expected ';' after variable declaration",
+        )?;
+        Ok(Stmt::new(
+            StmtKind::Binding {
+                name,
+                mutable,
+                annotation,
+                initializer,
+            },
+            pos,
+        ))
     }
 
-    fn function_declaration(&mut self) -> Result<Stmt, KarmaError> {
+    fn function_declaration(&mut self, pos: SourcePos) -> Result<Stmt, KarmaError> {
         let name = self.consume_identifier("expected function name after 'fn'")?;
         self.consume_simple(&TokenKind::LeftParen, "expected '(' after function name")?;
+
         let mut params = Vec::new();
         if !self.check_simple(&TokenKind::RightParen) {
             loop {
                 if params.len() >= 64 {
-                    return Err(self.error_here("functions are limited to 64 parameters in v0.1"));
+                    return Err(self.error_here("functions are limited to 64 parameters in v0.2"));
                 }
-                params.push(self.consume_identifier("expected parameter name")?);
+                let param_token = self.consume_identifier_token("expected parameter name")?;
+                let param_name = match &param_token.kind {
+                    TokenKind::Identifier(name) => name.clone(),
+                    _ => unreachable!(),
+                };
+                self.consume_simple(&TokenKind::Colon, "expected ':' after parameter name")?;
+                let ty = self.consume_type("expected parameter type after ':'")?;
+                params.push(Param {
+                    name: param_name,
+                    ty,
+                    pos: param_token.pos(),
+                });
                 if !self.match_simple(&TokenKind::Comma) {
                     break;
                 }
             }
         }
+
         self.consume_simple(&TokenKind::RightParen, "expected ')' after parameters")?;
+        self.consume_simple(&TokenKind::Arrow, "expected '->' after function parameters")?;
+        let return_type = self.consume_type("expected function return type after '->'")?;
         self.consume_simple(&TokenKind::LeftBrace, "expected '{' before function body")?;
         let body = self.block_items()?;
-        Ok(Stmt::Function { name, params, body })
+
+        Ok(Stmt::new(
+            StmtKind::Function {
+                name,
+                params,
+                return_type,
+                body,
+            },
+            pos,
+        ))
     }
 
     fn statement(&mut self) -> Result<Stmt, KarmaError> {
         if self.match_simple(&TokenKind::If) {
-            self.if_statement()
+            let pos = self.previous().pos();
+            self.if_statement(pos)
         } else if self.match_simple(&TokenKind::While) {
-            self.while_statement()
+            let pos = self.previous().pos();
+            self.while_statement(pos)
         } else if self.match_simple(&TokenKind::Return) {
-            self.return_statement()
+            let pos = self.previous().pos();
+            self.return_statement(pos)
         } else if self.match_simple(&TokenKind::LeftBrace) {
-            Ok(Stmt::Block(self.block_items()?))
+            let pos = self.previous().pos();
+            Ok(Stmt::new(StmtKind::Block(self.block_items()?), pos))
         } else {
             self.expression_statement()
         }
     }
 
-    fn if_statement(&mut self) -> Result<Stmt, KarmaError> {
+    fn if_statement(&mut self, pos: SourcePos) -> Result<Stmt, KarmaError> {
         let condition = self.expression()?;
         self.consume_simple(&TokenKind::LeftBrace, "expected '{' after if condition")?;
-        let then_branch = Box::new(Stmt::Block(self.block_items()?));
+        let then_pos = self.previous().pos();
+        let then_branch = Box::new(Stmt::new(StmtKind::Block(self.block_items()?), then_pos));
+
         let else_branch = if self.match_simple(&TokenKind::Else) {
+            let else_pos = self.previous().pos();
             if self.match_simple(&TokenKind::If) {
-                Some(Box::new(self.if_statement()?))
+                let nested_if_pos = self.previous().pos();
+                Some(Box::new(self.if_statement(nested_if_pos)?))
             } else {
                 self.consume_simple(&TokenKind::LeftBrace, "expected '{' after else")?;
-                Some(Box::new(Stmt::Block(self.block_items()?)))
+                Some(Box::new(Stmt::new(
+                    StmtKind::Block(self.block_items()?),
+                    else_pos,
+                )))
             }
         } else {
             None
         };
-        Ok(Stmt::If { condition, then_branch, else_branch })
+
+        Ok(Stmt::new(
+            StmtKind::If {
+                condition,
+                then_branch,
+                else_branch,
+            },
+            pos,
+        ))
     }
 
-    fn while_statement(&mut self) -> Result<Stmt, KarmaError> {
+    fn while_statement(&mut self, pos: SourcePos) -> Result<Stmt, KarmaError> {
         let condition = self.expression()?;
         self.consume_simple(&TokenKind::LeftBrace, "expected '{' after while condition")?;
-        let body = Box::new(Stmt::Block(self.block_items()?));
-        Ok(Stmt::While { condition, body })
+        let block_pos = self.previous().pos();
+        let body = Box::new(Stmt::new(StmtKind::Block(self.block_items()?), block_pos));
+        Ok(Stmt::new(StmtKind::While { condition, body }, pos))
     }
 
-    fn return_statement(&mut self) -> Result<Stmt, KarmaError> {
+    fn return_statement(&mut self, pos: SourcePos) -> Result<Stmt, KarmaError> {
         let value = if self.check_simple(&TokenKind::Semicolon) {
             None
         } else {
             Some(self.expression()?)
         };
         self.consume_simple(&TokenKind::Semicolon, "expected ';' after return value")?;
-        Ok(Stmt::Return(value))
+        Ok(Stmt::new(StmtKind::Return(value), pos))
     }
 
     fn block_items(&mut self) -> Result<Vec<Stmt>, KarmaError> {
@@ -118,8 +185,9 @@ impl Parser {
 
     fn expression_statement(&mut self) -> Result<Stmt, KarmaError> {
         let expr = self.expression()?;
+        let pos = expr.pos;
         self.consume_simple(&TokenKind::Semicolon, "expected ';' after expression")?;
-        Ok(Stmt::Expression(expr))
+        Ok(Stmt::new(StmtKind::Expression(expr), pos))
     }
 
     fn expression(&mut self) -> Result<Expr, KarmaError> {
@@ -130,8 +198,14 @@ impl Parser {
         let expr = self.equality()?;
         if self.match_simple(&TokenKind::Equal) {
             let value = self.assignment()?;
-            if let Expr::Variable(name) = expr {
-                return Ok(Expr::Assign { name, value: Box::new(value) });
+            if let ExprKind::Variable(name) = &expr.kind {
+                return Ok(Expr::new(
+                    ExprKind::Assign {
+                        name: name.clone(),
+                        value: Box::new(value),
+                    },
+                    expr.pos,
+                ));
             }
             return Err(self.error_previous("invalid assignment target"));
         }
@@ -141,9 +215,17 @@ impl Parser {
     fn equality(&mut self) -> Result<Expr, KarmaError> {
         let mut expr = self.comparison()?;
         while self.match_any(&[TokenKind::BangEqual, TokenKind::EqualEqual]) {
-            let op = self.previous().kind.clone();
+            let op_token = self.previous().clone();
+            let op_pos = op_token.pos();
             let right = self.comparison()?;
-            expr = Expr::Binary { left: Box::new(expr), op, right: Box::new(right) };
+            expr = Expr::new(
+                ExprKind::Binary {
+                    left: Box::new(expr),
+                    op: op_token.kind,
+                    right: Box::new(right),
+                },
+                op_pos,
+            );
         }
         Ok(expr)
     }
@@ -156,9 +238,17 @@ impl Parser {
             TokenKind::Less,
             TokenKind::LessEqual,
         ]) {
-            let op = self.previous().kind.clone();
+            let op_token = self.previous().clone();
+            let op_pos = op_token.pos();
             let right = self.term()?;
-            expr = Expr::Binary { left: Box::new(expr), op, right: Box::new(right) };
+            expr = Expr::new(
+                ExprKind::Binary {
+                    left: Box::new(expr),
+                    op: op_token.kind,
+                    right: Box::new(right),
+                },
+                op_pos,
+            );
         }
         Ok(expr)
     }
@@ -166,9 +256,17 @@ impl Parser {
     fn term(&mut self) -> Result<Expr, KarmaError> {
         let mut expr = self.factor()?;
         while self.match_any(&[TokenKind::Plus, TokenKind::Minus]) {
-            let op = self.previous().kind.clone();
+            let op_token = self.previous().clone();
+            let op_pos = op_token.pos();
             let right = self.factor()?;
-            expr = Expr::Binary { left: Box::new(expr), op, right: Box::new(right) };
+            expr = Expr::new(
+                ExprKind::Binary {
+                    left: Box::new(expr),
+                    op: op_token.kind,
+                    right: Box::new(right),
+                },
+                op_pos,
+            );
         }
         Ok(expr)
     }
@@ -176,18 +274,33 @@ impl Parser {
     fn factor(&mut self) -> Result<Expr, KarmaError> {
         let mut expr = self.unary()?;
         while self.match_any(&[TokenKind::Star, TokenKind::Slash]) {
-            let op = self.previous().kind.clone();
+            let op_token = self.previous().clone();
+            let op_pos = op_token.pos();
             let right = self.unary()?;
-            expr = Expr::Binary { left: Box::new(expr), op, right: Box::new(right) };
+            expr = Expr::new(
+                ExprKind::Binary {
+                    left: Box::new(expr),
+                    op: op_token.kind,
+                    right: Box::new(right),
+                },
+                op_pos,
+            );
         }
         Ok(expr)
     }
 
     fn unary(&mut self) -> Result<Expr, KarmaError> {
         if self.match_any(&[TokenKind::Bang, TokenKind::Minus]) {
-            let op = self.previous().kind.clone();
+            let op_token = self.previous().clone();
+            let op_pos = op_token.pos();
             let right = self.unary()?;
-            return Ok(Expr::Unary { op, right: Box::new(right) });
+            return Ok(Expr::new(
+                ExprKind::Unary {
+                    op: op_token.kind,
+                    right: Box::new(right),
+                },
+                op_pos,
+            ));
         }
         self.call()
     }
@@ -195,16 +308,18 @@ impl Parser {
     fn call(&mut self) -> Result<Expr, KarmaError> {
         let mut expr = self.primary()?;
         while self.match_simple(&TokenKind::LeftParen) {
-            let callee = if let Expr::Variable(name) = expr {
-                name
+            let call_pos = expr.pos;
+            let callee = if let ExprKind::Variable(name) = &expr.kind {
+                name.clone()
             } else {
-                return Err(self.error_previous("only named functions are callable in v0.1"));
+                return Err(self.error_previous("only named functions are callable in v0.2"));
             };
+
             let mut arguments = Vec::new();
             if !self.check_simple(&TokenKind::RightParen) {
                 loop {
                     if arguments.len() >= 64 {
-                        return Err(self.error_here("calls are limited to 64 arguments in v0.1"));
+                        return Err(self.error_here("calls are limited to 64 arguments in v0.2"));
                     }
                     arguments.push(self.expression()?);
                     if !self.match_simple(&TokenKind::Comma) {
@@ -213,31 +328,41 @@ impl Parser {
                 }
             }
             self.consume_simple(&TokenKind::RightParen, "expected ')' after arguments")?;
-            expr = Expr::Call { callee, arguments };
+            expr = Expr::new(ExprKind::Call { callee, arguments }, call_pos);
         }
         Ok(expr)
     }
 
     fn primary(&mut self) -> Result<Expr, KarmaError> {
         if self.match_simple(&TokenKind::False) {
-            return Ok(Expr::Literal(Literal::Bool(false)));
+            let token = self.previous().clone();
+            return Ok(Expr::new(
+                ExprKind::Literal(Literal::Bool(false)),
+                token.pos(),
+            ));
         }
         if self.match_simple(&TokenKind::True) {
-            return Ok(Expr::Literal(Literal::Bool(true)));
+            let token = self.previous().clone();
+            return Ok(Expr::new(
+                ExprKind::Literal(Literal::Bool(true)),
+                token.pos(),
+            ));
         }
 
-        match self.peek().kind.clone() {
+        let token = self.peek().clone();
+        let pos = token.pos();
+        match token.kind {
             TokenKind::Integer(value) => {
                 self.advance();
-                Ok(Expr::Literal(Literal::Int(value)))
+                Ok(Expr::new(ExprKind::Literal(Literal::Int(value)), pos))
             }
             TokenKind::String(value) => {
                 self.advance();
-                Ok(Expr::Literal(Literal::String(value)))
+                Ok(Expr::new(ExprKind::Literal(Literal::String(value)), pos))
             }
             TokenKind::Identifier(name) => {
                 self.advance();
-                Ok(Expr::Variable(name))
+                Ok(Expr::new(ExprKind::Variable(name), pos))
             }
             TokenKind::LeftParen => {
                 self.advance();
@@ -247,6 +372,19 @@ impl Parser {
             }
             _ => Err(self.error_here("expected expression")),
         }
+    }
+
+    fn consume_type(&mut self, message: &str) -> Result<Type, KarmaError> {
+        let token = self.peek().clone();
+        let ty = match token.kind {
+            TokenKind::TypeInt => Type::Int,
+            TokenKind::TypeBool => Type::Bool,
+            TokenKind::TypeString => Type::String,
+            TokenKind::TypeUnit => Type::Unit,
+            _ => return Err(KarmaError::new("parser", message, token.line, token.column)),
+        };
+        self.advance();
+        Ok(ty)
     }
 
     fn match_any(&mut self, kinds: &[TokenKind]) -> bool {
@@ -269,7 +407,10 @@ impl Parser {
     }
 
     fn check_simple(&self, kind: &TokenKind) -> bool {
-        std::mem::discriminant(&self.peek().kind) == std::mem::discriminant(kind)
+        if self.is_at_end() && !matches!(kind, TokenKind::Eof) {
+            return false;
+        }
+        same_variant(&self.peek().kind, kind)
     }
 
     fn consume_simple(&mut self, kind: &TokenKind, message: &str) -> Result<(), KarmaError> {
@@ -282,20 +423,19 @@ impl Parser {
     }
 
     fn consume_identifier(&mut self, message: &str) -> Result<String, KarmaError> {
-        match self.peek().kind.clone() {
-            TokenKind::Identifier(name) => {
-                self.advance();
-                Ok(name)
-            }
-            _ => Err(self.error_here(message)),
+        let token = self.consume_identifier_token(message)?;
+        if let TokenKind::Identifier(name) = token.kind {
+            Ok(name)
+        } else {
+            unreachable!()
         }
     }
 
-    fn advance(&mut self) -> &Token {
-        if !self.is_at_end() {
-            self.current += 1;
+    fn consume_identifier_token(&mut self, message: &str) -> Result<Token, KarmaError> {
+        match self.peek().kind.clone() {
+            TokenKind::Identifier(_) => Ok(self.advance().clone()),
+            _ => Err(self.error_here(message)),
         }
-        self.previous()
     }
 
     fn is_at_end(&self) -> bool {
@@ -307,7 +447,14 @@ impl Parser {
     }
 
     fn previous(&self) -> &Token {
-        &self.tokens[self.current.saturating_sub(1)]
+        &self.tokens[self.current - 1]
+    }
+
+    fn advance(&mut self) -> &Token {
+        if !self.is_at_end() {
+            self.current += 1;
+        }
+        self.previous()
     }
 
     fn error_here(&self, message: &str) -> KarmaError {
@@ -321,17 +468,40 @@ impl Parser {
     }
 }
 
+fn same_variant(a: &TokenKind, b: &TokenKind) -> bool {
+    std::mem::discriminant(a) == std::mem::discriminant(b)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::lexer::Lexer;
 
+    fn parse(source: &str) -> Result<Vec<Stmt>, KarmaError> {
+        Parser::new(Lexer::new(source).scan_tokens()?).parse()
+    }
+
     #[test]
-    fn parses_function() {
-        let tokens = Lexer::new("fn add(a, b) { return a + b; }")
-            .scan_tokens()
-            .unwrap();
-        let program = Parser::new(tokens).parse().unwrap();
-        assert!(matches!(&program[0], Stmt::Function { name, params, .. } if name == "add" && params.len() == 2));
+    fn parses_typed_and_inferred_bindings() {
+        let program = parse("let age: Int = 38; let name = \"Karma\";").unwrap();
+        assert_eq!(program.len(), 2);
+    }
+
+    #[test]
+    fn parses_mutable_binding() {
+        let program = parse("mut count: Int = 0; count = count + 1;").unwrap();
+        assert_eq!(program.len(), 2);
+    }
+
+    #[test]
+    fn parses_typed_function() {
+        let program = parse("fn add(a: Int, b: Int) -> Int { return a + b; }").unwrap();
+        assert_eq!(program.len(), 1);
+    }
+
+    #[test]
+    fn requires_function_parameter_types() {
+        let error = parse("fn add(a, b: Int) -> Int { return b; }").unwrap_err();
+        assert!(error.message.contains("expected ':'"));
     }
 }

@@ -6,9 +6,15 @@ use std::rc::Rc;
 
 pub type EnvRef = Rc<RefCell<Environment>>;
 
+#[derive(Debug, Clone)]
+struct Binding {
+    value: Value,
+    mutable: bool,
+}
+
 #[derive(Debug, Default)]
 pub struct Environment {
-    values: HashMap<String, Value>,
+    values: HashMap<String, Binding>,
     parent: Option<EnvRef>,
 }
 
@@ -24,19 +30,19 @@ impl Environment {
         }))
     }
 
-    pub fn define(&mut self, name: String, value: Value) -> Result<(), KarmaError> {
+    pub fn define(&mut self, name: String, value: Value, mutable: bool) -> Result<(), KarmaError> {
         if self.values.contains_key(&name) {
             return Err(KarmaError::runtime(format!(
                 "variable '{name}' is already defined in this scope"
             )));
         }
-        self.values.insert(name, value);
+        self.values.insert(name, Binding { value, mutable });
         Ok(())
     }
 
     pub fn get(&self, name: &str) -> Result<Value, KarmaError> {
-        if let Some(value) = self.values.get(name) {
-            return Ok(value.clone());
+        if let Some(binding) = self.values.get(name) {
+            return Ok(binding.value.clone());
         }
         if let Some(parent) = &self.parent {
             return parent.borrow().get(name);
@@ -45,8 +51,13 @@ impl Environment {
     }
 
     pub fn assign(&mut self, name: &str, value: Value) -> Result<(), KarmaError> {
-        if self.values.contains_key(name) {
-            self.values.insert(name.to_string(), value);
+        if let Some(binding) = self.values.get_mut(name) {
+            if !binding.mutable {
+                return Err(KarmaError::runtime(format!(
+                    "cannot assign to immutable binding '{name}'"
+                )));
+            }
+            binding.value = value;
             return Ok(());
         }
         if let Some(parent) = &self.parent {

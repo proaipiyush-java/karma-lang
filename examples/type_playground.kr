@@ -1,0 +1,7 @@
+fn add(a: Int, b: Int) -> Int {
+    return a + b;
+}
+
+let answer: Int = add("10", 20);
+
+print(answer);

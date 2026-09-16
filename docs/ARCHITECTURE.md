@@ -1,8 +1,8 @@
-# Karma v0.1 Architecture
+# Karma v0.2 Architecture
 
 ## Purpose
 
-v0.1 is the bootstrap foundation. It proves the language pipeline without prematurely committing to the final native backend.
+v0.2 introduces semantic analysis. The compiler now proves basic type, symbol, mutability, call, condition, and return invariants before execution.
 
 ```text
 .kr source
@@ -19,7 +19,17 @@ v0.1 is the bootstrap foundation. It proves the language pipeline without premat
 | Parser  |
 +---------+
     |
-   AST
+ Raw AST
+    |
+    v
++----------------+
+|  Type Checker  |
+| + symbols      |
+| + mutability   |
+| + returns      |
++----------------+
+    |
+ Typed AST
     |
     v
 +-------------+
@@ -33,57 +43,72 @@ v0.1 is the bootstrap foundation. It proves the language pipeline without premat
 
 ```text
 src/
-  main.rs          CLI + source-file safety boundary
+  main.rs          CLI, source-file boundary, front-end orchestration
+  source.rs        source positions
   token.rs         token model
-  lexer.rs         UTF-8 source -> tokens
-  ast.rs           syntax tree
+  lexer.rs         source -> tokens
+  types.rs         compiler-level static types
+  ast.rs           raw syntax tree
   parser.rs        recursive-descent parser
-  value.rs         bootstrap runtime values
-  environment.rs   lexical variable scopes
-  interpreter.rs   AST evaluator + runtime limits
-  error.rs         structured bootstrap diagnostics
+  typed_ast.rs     semantically checked syntax tree
+  type_checker.rs  symbols + static semantic rules
+  value.rs         runtime values
+  environment.rs   runtime lexical bindings + mutability
+  interpreter.rs   Typed AST evaluator + runtime limits
+  error.rs         diagnostics
 ```
 
-## Boundaries preserved for later releases
-
-The front end is deliberately separated so that v0.4 can replace the interpreter backend without replacing the lexer/parser/AST work:
+## Compiler boundaries
 
 ```text
-                       +--> Interpreter (v0.1)
-Source -> Lexer -> Parser -> AST
-                       +--> Typed AST -> KIR -> Native backend (future)
+Source
+  -> Lexer
+  -> Parser
+  -> Raw AST
+  -> Type Checker
+  -> Typed AST
+       |
+       +-> Interpreter (v0.2)
+       |
+       `-> KIR -> native backend (future)
 ```
 
-## Security baseline
+The Typed AST is now the semantic boundary. Future native-code work should lower from Typed AST rather than re-deriving type rules in the backend.
 
-1. The crate root uses `#![forbid(unsafe_code)]`.
-2. No third-party dependencies are required for v0.1.
-3. Arithmetic uses checked integer operations.
-4. Source size, execution steps, call depth, and arity are bounded in the bootstrap runtime.
-5. The interpreter does not expose filesystem, network, process, environment-variable, FFI, or shell capabilities to Karma code.
-6. There are no background threads.
+## Static guarantees in v0.2
 
-## Memory baseline
+Before normal execution Karma verifies:
 
-v0.1 is an interpreter and therefore is not the final memory model. However:
+- referenced variables exist;
+- assignment only targets mutable bindings;
+- binding annotations match initializer types;
+- operator operands have legal types;
+- control-flow conditions are Bool;
+- called functions exist;
+- call arity matches;
+- call argument types match;
+- returned values match declared return types;
+- non-Unit functions conservatively return on all paths;
+- nested functions are rejected in v0.2.
 
-- functions are stored separately from variable environments, avoiding closure/environment reference cycles;
-- scopes use reference-counted parent links with no child-to-parent cycle;
-- no global tracing GC is introduced;
-- there are no hidden worker pools or JIT structures;
-- the implementation remains small enough to profile before ownership semantics are designed in v0.3.
+## Runtime defense in depth
 
-## Deliberate non-goals
+The runtime retains checks for invariants that should already be statically valid, including immutable assignment rejection. It also checks value-dependent failures such as integer overflow, division by zero, maximum execution steps, and maximum call depth.
 
-v0.1 does not define the final:
+## Future boundary
 
-- static type system;
-- ownership/borrowing model;
-- KIR representation;
-- ABI;
-- native code generator;
-- async runtime;
-- package manager;
-- enterprise libraries.
-
-Those decisions will be introduced only after their invariants are documented.
+```text
+Typed AST
+   |
+   v
+  KIR
+   |
+ optimization
+   |
+   v
+native backend
+   |
+   +-> ARM64
+   +-> x86-64
+   `-> future targets
+```

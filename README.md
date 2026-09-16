@@ -1,123 +1,152 @@
-# Karma Programming Language — v0.1 Bootstrap
+# Karma Programming Language — v0.2 Static Type System
 
-![Karma v0.1 Foundation](docs/assets/karma-v0.1-foundation.png)
+Karma is an experimental programming language focused on security, memory efficiency, predictable process behavior, native compilation, and long-term system compatibility.
 
-Karma is an experimental programming language project focused on security, memory efficiency, predictable runtime behavior, native compilation, and long-term system compatibility.
+**v0.2 adds compile-time semantic analysis and a real Typed AST.**
 
-This repository is the first working bootstrap milestone.
-
-## v0.1 pipeline
+## Compiler pipeline
 
 ```text
-.kr source -> Lexer -> Tokens -> Parser -> AST -> Interpreter -> Output
+.kr source
+   ↓
+Lexer
+   ↓
+Tokens
+   ↓
+Parser
+   ↓
+Raw AST
+   ↓
+Type Checker / Symbol Resolution
+   ↓
+Typed AST
+   ↓
+Interpreter (bootstrap backend)
+   ↓
+Output
 ```
 
-v0.1 is intentionally interpreted. The interpreter is a bootstrap backend, not Karma's production runtime. Native compilation is planned behind the same front-end boundary.
+The interpreter is still the execution backend in v0.2. The Typed AST is the foundation for KIR and native compilation in later releases.
 
-## Current syntax
+## New in v0.2
+
+- Static primitive types: `Int`, `Bool`, `String`, `Unit`
+- Optional local type inference
+- Typed function parameters and return types
+- `let` is immutable by default
+- `mut` explicitly opts into mutation
+- Compile-time symbol resolution
+- Compile-time operator type checking
+- Compile-time function argument checking
+- Compile-time return type checking
+- Boolean-only `if` and `while` conditions
+- Basic all-path return analysis for non-`Unit` functions
+- A real Typed AST
+- `karma --check file.kr` to type-check without execution
+- Source positions carried into type errors
+- Runtime mutability checks retained as defense-in-depth
+
+## Example
 
 ```karma
-fn factorial(n) {
+fn factorial(n: Int) -> Int {
     if n <= 1 {
         return 1;
     }
     return n * factorial(n - 1);
 }
 
-let answer = factorial(10);
-print(answer);
+let language: String = "Karma";
+mut count: Int = 0;
+count = count + 1;
+
+print(language);
+print(factorial(10));
+print(count);
 ```
 
-## Prerequisite
+## Compile-time failures
 
-Install a current stable Rust toolchain.
+This is invalid:
 
-### macOS
-
-With Homebrew:
-
-```bash
-brew install rust
+```karma
+let age: Int = "thirty eight";
 ```
 
-Or install Rust using the official rustup installer.
+Karma rejects it before the interpreter runs:
 
-### Linux
-
-Install Rust using your distribution package manager or rustup.
-
-Verify:
-
-```bash
-rustc --version
-cargo --version
+```text
+type error: initializer for 'age' expects Int, found String
 ```
 
-## Build
+This is also invalid because `let` is immutable:
 
-```bash
-cargo build
+```karma
+let count: Int = 0;
+count = 1;
 ```
 
-Run tests:
+Use explicit mutation:
+
+```karma
+mut count: Int = 0;
+count = 1;
+```
+
+## Build and test
 
 ```bash
 cargo test
-```
-
-Run Karma:
-
-```bash
-cargo run -- examples/hello.kr
-cargo run -- examples/functions.kr
-```
-
-Release build:
-
-```bash
 cargo build --release
-./target/release/karma examples/hello.kr
+./scripts/smoke.sh
 ```
 
-## Expected output
+## Type-check only
 
-`examples/hello.kr`:
-
-```text
-Hello from Karma!
+```bash
+./target/release/karma --check examples/hello.kr
 ```
 
-`examples/functions.kr`:
+Expected:
 
 ```text
-3628800
+Karma check: OK
 ```
 
-## Security baseline in v0.1
+## Run
 
-- `unsafe` Rust is forbidden in the crate.
-- No external Rust dependencies.
-- Checked integer arithmetic.
-- Division-by-zero protection.
-- Bounded source size.
-- Bounded bootstrap execution steps.
-- Bounded function call depth.
-- No file/network/process/FFI access exposed to Karma programs.
-- No background threads.
+```bash
+./target/release/karma examples/functions.kr
+```
 
-See `docs/DESIGN_CONSTITUTION.md` and `docs/ARCHITECTURE.md`.
+## Install locally
 
-## Not yet in v0.1
+```bash
+./scripts/install-local.sh
+```
 
-Static typing, `Option`/`Result`, ownership/lifetimes, KIR, LLVM/native code generation, packages, concurrency, networking, databases, and enterprise runtime libraries are intentionally deferred.
+If needed:
 
-## Version plan
+```bash
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
+source ~/.zshrc
+```
 
-The immediate sequence is:
+Then:
+
+```bash
+karma --version
+karma --check examples/functions.kr
+karma examples/functions.kr
+```
+
+## Version direction
 
 ```text
-v0.1  working language front end + interpreter
-v0.2  static type system
-v0.3  production memory model
+v0.1  Lexer + parser + AST + interpreter
+v0.2  Static type system + Typed AST       ← current
+v0.3  Memory/resource model
 v0.4  KIR + native compilation
 ```
+
+Read `docs/V0_2_DEEP_DIVE.md` for a beginner-first explanation of every new compiler concept.

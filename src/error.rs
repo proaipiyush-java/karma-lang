@@ -9,7 +9,12 @@ pub struct KarmaError {
 }
 
 impl KarmaError {
-    pub fn new(phase: &'static str, message: impl Into<String>, line: usize, column: usize) -> Self {
+    pub fn new(
+        phase: &'static str,
+        message: impl Into<String>,
+        line: usize,
+        column: usize,
+    ) -> Self {
         Self {
             phase,
             message: message.into(),

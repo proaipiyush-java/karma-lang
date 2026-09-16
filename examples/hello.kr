@@ -1,2 +1,2 @@
-let language = "Karma";
-print("Hello from " + language + "!");
+let language: String = "Karma";
+print("Hello from " + language);
