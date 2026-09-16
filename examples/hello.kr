@@ -1,0 +1,2 @@
+let language = "Karma";
+print("Hello from " + language + "!");

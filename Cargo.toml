@@ -1,0 +1,19 @@
+[package]
+name = "karma-lang"
+version = "0.1.0"
+edition = "2021"
+authors = ["Karma Language Project"]
+description = "Karma programming language bootstrap interpreter"
+license = "Apache-2.0 OR MIT"
+publish = false
+
+[[bin]]
+name = "karma"
+path = "src/main.rs"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
