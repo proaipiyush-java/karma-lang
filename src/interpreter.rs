@@ -2,9 +2,13 @@ use crate::ast::{Literal, Param};
 use crate::environment::{EnvRef, Environment};
 use crate::error::KarmaError;
 use crate::token::TokenKind;
-use crate::typed_ast::{TypedExpr, TypedExprKind, TypedProgram, TypedStmt, TypedStmtKind};
+use crate::typed_ast::{
+    TypedExpr, TypedExprKind, TypedProgram, TypedStmt, TypedStmtKind, ValueAccess,
+};
+use crate::types::ParamMode;
 use crate::value::Value;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 #[derive(Debug, Clone)]
 struct FunctionDef {
@@ -82,10 +86,10 @@ impl Interpreter {
                 name, params, body, ..
             } = &stmt.kind
             {
-                if name == "print" {
-                    return Err(KarmaError::runtime(
-                        "'print' is a reserved built-in function",
-                    ));
+                if matches!(name.as_str(), "print" | "clone" | "drop") {
+                    return Err(KarmaError::runtime(format!(
+                        "'{name}' is a reserved built-in function"
+                    )));
                 }
                 if self.functions.contains_key(name) {
                     return Err(KarmaError::runtime(format!(
@@ -114,7 +118,8 @@ impl Interpreter {
                 ..
             } => {
                 let value = self.evaluate(initializer, env.clone())?;
-                env.borrow_mut().define(name.clone(), value, *mutable)?;
+                env.borrow_mut()
+                    .define(name.clone(), value, *mutable, true)?;
                 Ok(Flow::Continue)
             }
             TypedStmtKind::Expression(expr) => {
@@ -181,6 +186,8 @@ impl Interpreter {
                 flow @ Flow::Return(_) => return Ok(flow),
             }
         }
+        // Dropping the block environment deterministically releases values still
+        // owned by this scope in the bootstrap runtime.
         Ok(Flow::Continue)
     }
 
@@ -190,13 +197,16 @@ impl Interpreter {
             TypedExprKind::Literal(literal) => Ok(match literal {
                 Literal::Int(v) => Value::Int(*v),
                 Literal::Bool(v) => Value::Bool(*v),
-                Literal::String(v) => Value::String(v.clone()),
+                Literal::String(v) => Value::String(Rc::<str>::from(v.as_str())),
             }),
-            TypedExprKind::Variable(name) => env.borrow().get(name),
+            TypedExprKind::Variable { name, access } => match access {
+                ValueAccess::Copy | ValueAccess::Borrow => env.borrow().get(name),
+                ValueAccess::Move => env.borrow_mut().take(name),
+            },
             TypedExprKind::Assign { name, value } => {
                 let value = self.evaluate(value, env.clone())?;
-                env.borrow_mut().assign(name, value.clone())?;
-                Ok(value)
+                env.borrow_mut().assign(name, value)?;
+                Ok(Value::Unit)
             }
             TypedExprKind::Unary { op, right } => {
                 let right = self.evaluate(right, env)?;
@@ -233,24 +243,31 @@ impl Interpreter {
     }
 
     fn eval_binary(&self, left: Value, op: &TokenKind, right: Value) -> Result<Value, KarmaError> {
-        use TokenKind::*;
         match op {
-            Plus => match (left, right) {
+            TokenKind::Plus => match (left, right) {
                 (Value::Int(a), Value::Int(b)) => a
                     .checked_add(b)
                     .map(Value::Int)
                     .ok_or_else(|| KarmaError::runtime("integer overflow in '+'")),
-                (Value::String(a), Value::String(b)) => Ok(Value::String(a + &b)),
+                (Value::String(a), Value::String(b)) => {
+                    let mut combined = String::with_capacity(a.len() + b.len());
+                    combined.push_str(&a);
+                    combined.push_str(&b);
+                    Ok(Value::String(Rc::<str>::from(combined)))
+                }
                 _ => Err(KarmaError::runtime(
                     "internal invariant: invalid '+' operands passed type checking",
                 )),
             },
-            Minus | Star | Slash => self.eval_integer_arithmetic(left, op, right),
-            Greater | GreaterEqual | Less | LessEqual => {
-                self.eval_integer_comparison(left, op, right)
+            TokenKind::Minus | TokenKind::Star | TokenKind::Slash => {
+                self.eval_integer_arithmetic(left, op, right)
             }
-            EqualEqual => Ok(Value::Bool(left == right)),
-            BangEqual => Ok(Value::Bool(left != right)),
+            TokenKind::Greater
+            | TokenKind::GreaterEqual
+            | TokenKind::Less
+            | TokenKind::LessEqual => self.eval_integer_comparison(left, op, right),
+            TokenKind::EqualEqual => Ok(Value::Bool(left == right)),
+            TokenKind::BangEqual => Ok(Value::Bool(left != right)),
             _ => Err(KarmaError::runtime("unsupported binary operator")),
         }
     }
@@ -329,6 +346,31 @@ impl Interpreter {
             return Ok(Value::Unit);
         }
 
+        if callee == "clone" {
+            if arguments.len() != 1 {
+                return Err(KarmaError::runtime(format!(
+                    "clone expects 1 argument, got {}",
+                    arguments.len()
+                )));
+            }
+            // The typed argument is Borrow access, so evaluating it does not
+            // invalidate the source owner. Rc<str> lets String share immutable
+            // backing storage in the bootstrap interpreter.
+            return self.evaluate(&arguments[0], env);
+        }
+
+        if callee == "drop" {
+            if arguments.len() != 1 {
+                return Err(KarmaError::runtime(format!(
+                    "drop expects 1 argument, got {}",
+                    arguments.len()
+                )));
+            }
+            let value = self.evaluate(&arguments[0], env)?;
+            std::mem::drop(value);
+            return Ok(Value::Unit);
+        }
+
         let function = self
             .functions
             .get(callee)
@@ -355,9 +397,10 @@ impl Interpreter {
         self.call_depth += 1;
         let call_env = Environment::child(self.globals.clone());
         for (param, value) in function.params.iter().zip(values) {
+            let movable = param.mode == ParamMode::Owned;
             call_env
                 .borrow_mut()
-                .define(param.name.clone(), value, false)?;
+                .define(param.name.clone(), value, false, movable)?;
         }
 
         let result = match self.execute_block(&function.body, call_env) {
@@ -416,6 +459,63 @@ mod tests {
     fn runs_mutable_binding() {
         let source = "mut count: Int = 1; count = count + 1; print(count);";
         assert_eq!(run(source).unwrap(), vec!["2"]);
+    }
+
+    #[test]
+    fn borrowed_call_keeps_string_available() {
+        let source = r#"
+            fn show(text: borrow String) -> Unit { print(text); }
+            let name: String = "Karma";
+            show(name);
+            print(name);
+        "#;
+        assert_eq!(run(source).unwrap(), vec!["Karma", "Karma"]);
+    }
+
+    #[test]
+    fn clone_preserves_original_owner() {
+        let source = r#"
+            let first: String = "Karma";
+            let second: String = clone(first);
+            print(first);
+            print(second);
+        "#;
+        assert_eq!(run(source).unwrap(), vec!["Karma", "Karma"]);
+    }
+
+    #[test]
+    fn move_then_reinitialize_runs() {
+        let source = r#"
+            mut first: String = "one";
+            let second: String = first;
+            first = "two";
+            print(first);
+            print(second);
+        "#;
+        assert_eq!(run(source).unwrap(), vec!["two", "one"]);
+    }
+
+    #[test]
+    fn owned_parameter_can_be_returned_to_transfer_ownership_again() {
+        let source = r#"
+            fn identity(text: String) -> String { return text; }
+            let first: String = "Karma";
+            let second: String = identity(first);
+            print(second);
+        "#;
+        assert_eq!(run(source).unwrap(), vec!["Karma"]);
+    }
+
+    #[test]
+    fn borrowed_parameter_can_clone_an_owned_return() {
+        let source = r#"
+            fn duplicate(text: borrow String) -> String { return clone(text); }
+            let first: String = "Karma";
+            let second: String = duplicate(first);
+            print(first);
+            print(second);
+        "#;
+        assert_eq!(run(source).unwrap(), vec!["Karma", "Karma"]);
     }
 
     #[test]

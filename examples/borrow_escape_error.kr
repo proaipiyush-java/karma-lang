@@ -1,0 +1,4 @@
+fn steal(text: borrow String) -> String {
+    // Static error: a borrow cannot escape by becoming an owned return value.
+    return text;
+}

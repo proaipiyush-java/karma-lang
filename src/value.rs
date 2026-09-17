@@ -1,10 +1,15 @@
 use std::fmt;
+use std::rc::Rc;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     Int(i64),
     Bool(bool),
-    String(String),
+    /// The bootstrap interpreter uses shared immutable backing storage so a
+    /// borrow can be represented without copying the string bytes. This is an
+    /// interpreter implementation detail; native Karma is free to lower String
+    /// to a pointer/length/capacity representation later.
+    String(Rc<str>),
     Unit,
 }
 

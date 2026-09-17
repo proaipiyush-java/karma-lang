@@ -3,6 +3,16 @@ use crate::source::SourcePos;
 use crate::token::TokenKind;
 use crate::types::Type;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ValueAccess {
+    /// Small Copy value. Reading does not invalidate the source binding.
+    Copy,
+    /// Ownership transfers out of the source binding.
+    Move,
+    /// Read-only, call-scoped access. Ownership stays with the source binding.
+    Borrow,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct TypedExpr {
     pub kind: TypedExprKind,
@@ -19,7 +29,10 @@ impl TypedExpr {
 #[derive(Debug, Clone, PartialEq)]
 pub enum TypedExprKind {
     Literal(Literal),
-    Variable(String),
+    Variable {
+        name: String,
+        access: ValueAccess,
+    },
     Assign {
         name: String,
         value: Box<TypedExpr>,

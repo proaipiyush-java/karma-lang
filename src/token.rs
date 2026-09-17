@@ -27,6 +27,7 @@ pub enum TokenKind {
     String(String),
     Let,
     Mut,
+    Borrow,
     Fn,
     Return,
     If,

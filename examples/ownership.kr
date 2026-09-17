@@ -1,0 +1,28 @@
+fn show(text: borrow String) -> Unit {
+    print(text);
+}
+
+fn consume(text: String) -> Unit {
+    print(text);
+}
+
+let language: String = "Karma";
+
+// Borrow: owner remains available.
+show(language);
+print(language);
+
+// Explicit logical duplication: both bindings remain usable.
+let copy: String = clone(language);
+print(language);
+print(copy);
+
+// Move: ownership transfers to consume().
+let disposable: String = "temporary";
+consume(disposable);
+
+// Copy values do not move.
+let answer: Int = 42;
+let second: Int = answer;
+print(answer);
+print(second);

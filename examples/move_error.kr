@@ -1,0 +1,5 @@
+let first: String = "Karma";
+let second: String = first;
+
+// Static error: ownership of first was transferred to second.
+print(first);

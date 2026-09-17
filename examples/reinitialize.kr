@@ -1,0 +1,8 @@
+mut message: String = "first owner";
+let old_message: String = message;
+
+// message was moved, but a mutable binding can be reinitialized.
+message = "new owner";
+
+print(old_message);
+print(message);

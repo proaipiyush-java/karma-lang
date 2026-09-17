@@ -17,3 +17,6 @@ These are project-level constraints. A release proposal that violates one must i
 13. **Reproducible builds are a target.** Toolchain, dependencies, and build inputs must be lockable and verifiable.
 14. **Diagnostics are part of correctness.** Security and type errors should explain what invariant was violated and how to fix it.
 15. **Enterprise features build on language invariants.** HTTP, database, messaging, AI, and framework work cannot bypass the core safety model.
+16. **Ownership transfer is explicit in semantics.** Non-Copy resources must not be silently duplicated merely because a variable is assigned or passed.
+17. **Borrowing starts narrow.** Read-only borrowing is call-scoped in v0.3; general references/lifetimes are added only when concrete requirements justify the complexity.
+18. **Resource cleanup is deterministic by default.** Values/resources still owned by a lexical scope are reclaimed when ownership ends; future resource APIs must preserve this principle.

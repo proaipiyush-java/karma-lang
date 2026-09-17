@@ -178,6 +178,7 @@ impl Lexer {
         match text.as_str() {
             "let" => TokenKind::Let,
             "mut" => TokenKind::Mut,
+            "borrow" => TokenKind::Borrow,
             "fn" => TokenKind::Fn,
             "return" => TokenKind::Return,
             "if" => TokenKind::If,
@@ -253,6 +254,14 @@ mod tests {
         let tokens = Lexer::new(source).scan_tokens().unwrap();
         assert!(tokens.iter().any(|t| matches!(t.kind, TokenKind::Mut)));
         assert!(tokens.iter().any(|t| matches!(t.kind, TokenKind::Arrow)));
+    }
+
+    #[test]
+    fn lexes_borrow_parameter_mode() {
+        let tokens = Lexer::new("fn show(s: borrow String) -> Unit { print(s); }")
+            .scan_tokens()
+            .unwrap();
+        assert!(tokens.iter().any(|t| matches!(t.kind, TokenKind::Borrow)));
     }
 
     #[test]

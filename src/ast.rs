@@ -1,6 +1,6 @@
 use crate::source::SourcePos;
 use crate::token::TokenKind;
-use crate::types::Type;
+use crate::types::{ParamMode, Type};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Literal {
@@ -48,6 +48,7 @@ pub enum ExprKind {
 pub struct Param {
     pub name: String,
     pub ty: Type,
+    pub mode: ParamMode,
     pub pos: SourcePos,
 }
 

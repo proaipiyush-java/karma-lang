@@ -1,0 +1,7 @@
+let message: String = "Karma";
+
+while false {
+    // Static error in v0.3: if this loop did run, a later iteration could see
+    // message after ownership was transferred.
+    drop(message);
+}

@@ -23,7 +23,7 @@ use std::path::Path;
 use std::process::ExitCode;
 use type_checker::TypeChecker;
 
-const VERSION: &str = "0.2.0";
+const VERSION: &str = "0.3.0";
 const MAX_SOURCE_BYTES: u64 = 8 * 1024 * 1024;
 
 fn main() -> ExitCode {
@@ -75,7 +75,7 @@ fn read_source(path: &str) -> Result<String, KarmaError> {
         .map_err(|e| KarmaError::runtime(format!("cannot read '{}': {e}", path.display())))?;
     if metadata.len() > MAX_SOURCE_BYTES {
         return Err(KarmaError::runtime(format!(
-            "source file exceeds v0.2 safety limit of {} MiB",
+            "source file exceeds v0.3 safety limit of {} MiB",
             MAX_SOURCE_BYTES / 1024 / 1024
         )));
     }

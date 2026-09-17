@@ -2,7 +2,7 @@ use crate::ast::{Expr, ExprKind, Literal, Param, Stmt, StmtKind};
 use crate::error::KarmaError;
 use crate::source::SourcePos;
 use crate::token::{Token, TokenKind};
-use crate::types::Type;
+use crate::types::{ParamMode, Type};
 
 pub struct Parser {
     tokens: Vec<Token>,
@@ -69,7 +69,7 @@ impl Parser {
         if !self.check_simple(&TokenKind::RightParen) {
             loop {
                 if params.len() >= 64 {
-                    return Err(self.error_here("functions are limited to 64 parameters in v0.2"));
+                    return Err(self.error_here("functions are limited to 64 parameters in v0.3"));
                 }
                 let param_token = self.consume_identifier_token("expected parameter name")?;
                 let param_name = match &param_token.kind {
@@ -77,10 +77,16 @@ impl Parser {
                     _ => unreachable!(),
                 };
                 self.consume_simple(&TokenKind::Colon, "expected ':' after parameter name")?;
+                let mode = if self.match_simple(&TokenKind::Borrow) {
+                    ParamMode::Borrowed
+                } else {
+                    ParamMode::Owned
+                };
                 let ty = self.consume_type("expected parameter type after ':'")?;
                 params.push(Param {
                     name: param_name,
                     ty,
+                    mode,
                     pos: param_token.pos(),
                 });
                 if !self.match_simple(&TokenKind::Comma) {
@@ -312,14 +318,14 @@ impl Parser {
             let callee = if let ExprKind::Variable(name) = &expr.kind {
                 name.clone()
             } else {
-                return Err(self.error_previous("only named functions are callable in v0.2"));
+                return Err(self.error_previous("only named functions are callable in v0.3"));
             };
 
             let mut arguments = Vec::new();
             if !self.check_simple(&TokenKind::RightParen) {
                 loop {
                     if arguments.len() >= 64 {
-                        return Err(self.error_here("calls are limited to 64 arguments in v0.2"));
+                        return Err(self.error_here("calls are limited to 64 arguments in v0.3"));
                     }
                     arguments.push(self.expression()?);
                     if !self.match_simple(&TokenKind::Comma) {
@@ -497,6 +503,18 @@ mod tests {
     fn parses_typed_function() {
         let program = parse("fn add(a: Int, b: Int) -> Int { return a + b; }").unwrap();
         assert_eq!(program.len(), 1);
+    }
+
+    #[test]
+    fn parses_borrowed_parameter() {
+        let program = parse("fn show(text: borrow String) -> Unit { print(text); }").unwrap();
+        match &program[0].kind {
+            StmtKind::Function { params, .. } => {
+                assert_eq!(params[0].mode, ParamMode::Borrowed);
+                assert_eq!(params[0].ty, Type::String);
+            }
+            _ => panic!("expected function"),
+        }
     }
 
     #[test]
