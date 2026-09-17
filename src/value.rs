@@ -8,25 +8,6 @@ pub enum Value {
     Unit,
 }
 
-impl Value {
-    pub fn is_truthy(&self) -> bool {
-        match self {
-            Value::Bool(value) => *value,
-            Value::Unit => false,
-            _ => true,
-        }
-    }
-
-    pub fn type_name(&self) -> &'static str {
-        match self {
-            Value::Int(_) => "Int",
-            Value::Bool(_) => "Bool",
-            Value::String(_) => "String",
-            Value::Unit => "Unit",
-        }
-    }
-}
-
 impl fmt::Display for Value {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
